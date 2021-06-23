@@ -1,0 +1,248 @@
+<?xml version="1.0" encoding="utf-8"?>
+<modification>
+    <name>Salesbeat - Один модуль для всех служб доставки</name>
+    <code>salesbeat_oc2</code>
+    <version>1.4.1</version>
+    <author>Salesbeat</author>
+    <link>https://salesbeat.pro</link>
+    
+    <!-- Catalog -->
+    <!-- Добавляем возможность подключение скриптов на странице checkout -->
+    <file path="catalog/controller/common/header.php">
+        <operation>
+            <search>$this->document->getTitle();</search>
+            <add position="before"><![CDATA[
+            if (isset($this->request->get['route'])) {
+                $explode = explode('/', $this->request->get['route']);
+
+                if ($explode[0] == 'checkout') {
+                    $this->document->addScript('//app.salesbeat.pro/static/widget/js/widget.js');
+                    $this->document->addScript('//app.salesbeat.pro/static/widget/js/cart_widget.js');
+                }
+            }
+            ]]></add>
+        </operation>
+    </file>
+
+    <!-- Добавляем возможность описания у методов доставки -->
+    <file path="catalog/view/theme/*/template/checkout/shipping_method.tpl">
+        <operation>
+            <search><![CDATA[<?php echo $quote['text']; ?>]]></search>
+            <add position="after"><![CDATA[
+            <?php
+            if (!empty($quote['description'])):
+                echo $quote['description'];
+            endif;
+            ?>
+            ]]></add>
+        </operation>
+    </file>
+
+    <!-- Дополняем в котроллере возможность формировать данные для вывода виджета расчетов в карточке товара  -->
+    <file path="catalog/controller/product/product.php">
+        <operation>
+            <search><![CDATA[$this->model_catalog_product->updateViewed]]></search>
+            <add position="before"><![CDATA[
+            if (isset($product_info)) {
+                $this->document->addScript('//app.salesbeat.pro/static/widget/js/widget.js');
+
+                $product_info['width'] = !empty($product_info['width']) && $product_info['width'] > 0 ?
+                    $product_info['width'] : $this->config->get('module_salesbeat_default_width');
+                $product_info['height'] = !empty($product_info['height']) && $product_info['height'] > 0 ?
+                    $product_info['height'] : $this->config->get('module_salesbeat_default_height');
+                $product_info['length'] = !empty($product_info['length']) && $product_info['length'] > 0 ?
+                    $product_info['length'] : $this->config->get('module_salesbeat_default_length');
+                $product_info['width'] = !empty($product_info['weight']) && $product_info['weight'] > 0 ?
+                    $product_info['weight'] : $this->config->get('module_salesbeat_default_weight');
+
+                $sbData = [];
+                $sbData['token'] = $this->config->get('module_salesbeat_api_token');
+                $sbData['price_to_pay'] = ceil($product_info['price']);
+                $sbData['price_insurance'] = ceil($product_info['price']);
+                $sbData['weight'] = ceil($product_info['weight']);
+                $sbData['x'] = ceil($product_info['width'] * 0.1);
+                $sbData['y'] = ceil($product_info['height'] * 0.1);
+                $sbData['z'] = ceil($product_info['length'] * 0.1);
+                $sbData['quantity'] = ceil($product_info['minimum'] ?: 1);
+                $sbData['city_by'] = 'ip';
+                $sbData['params_by'] = 'params';
+                $sbData['main_div_id'] = 'salesbeat-deliveries-' . rand(1, 999);
+                $data['salesbeat'] = $sbData;
+            }
+            ]]></add>
+        </operation>
+    </file>
+
+    <!-- Admin -->
+    <!-- Дополняем в котроллере возможность формировать данные о доставке в методах info(), invoice(), shipping() -->
+    <file path="admin/controller/sale/order.php">
+        <operation>
+            <search><![CDATA[$order_info = $this->model_sale_order->getOrder($order_id);]]></search>
+            <add position="after"><![CDATA[
+            $data['salesbeat'] = [];
+            if ($order_info['shipping_code'] == 'salesbeat.salesbeat') {
+                if (__FUNCTION__ == 'info' || __FUNCTION__ == 'invoice' || __FUNCTION__ == 'shipping') {
+                    $this->load->language('sale/sb_order');
+
+                    $sbTitle = $this->language->get('sb_title');
+
+                    $sbData = [];
+                    if (isset($order_info['shipping_custom_field']['salesbeat'])) {
+                        $sbInfo = $order_info['shipping_custom_field']['salesbeat'];
+
+                        if (isset($sbInfo['region_name']) || isset($sbInfo['city_name'])) {
+                            $sbLocation = $sbInfo['region_name'] ?: '';
+                            $sbLocation .= $sbInfo['short_name'] || $sbInfo['city_name'] ? ', ' : '';
+                            $sbLocation .= $sbInfo['short_name'] ? $sbInfo['short_name'] . '. ' : '';
+                            $sbLocation .= $sbInfo['city_name'] ?: '';
+
+                            $sbData['location'] = [
+                                'name' => $this->language->get('sb_location'),
+                                'value' => $sbLocation
+                            ];
+                        }
+
+                        if (isset($sbInfo['delivery_method_name'])) {
+                            $sbData['method_name'] = [
+                                'name' => $this->language->get('sb_delivery_method_name'),
+                                'value' => $sbInfo['delivery_method_name']
+                            ];
+                        }
+
+                        if (isset($sbInfo['delivery_price'])) {
+                            $sbData['price'] = [
+                                'name' => $this->language->get('sb_delivery_price'),
+                                'value' => $sbInfo['delivery_price']
+                            ];
+                        }
+
+                        if (isset($sbInfo['delivery_days'])) {
+                            $sbData['days'] = [
+                                'name' => $this->language->get('sb_delivery_days'),
+                                'value' => $sbInfo['delivery_days']
+                            ];
+                        }
+
+                        if (isset($sbInfo['pvz_address'])) {
+                            $sbData['pvz_address'] = [
+                                'name' => $this->language->get('sb_pvz_address'),
+                                'value' => $sbInfo['pvz_address']
+                            ];
+                        }
+
+                        if (isset($sbInfo['street']) || isset($sbInfo['house']) || isset($sbInfo['house_block']) || isset($sbInfo['flat'])) {
+                            $sbAddress = $sbInfo['street'] ? $this->language->get('sb_address_street') . ' ' . $sbInfo['street'] : '';
+                            $sbAddress .= $sbInfo['house'] ? ', ' . $this->language->get('sb_address_house') . ' ' . $sbInfo['house'] : '';
+                            $sbAddress .= $sbInfo['house_block'] ? ' ' . $this->language->get('sb_address_house_block') . ' ' . $sbInfo['house_block'] : '';
+                            $sbAddress .= $sbInfo['flat'] ? ', ' . $this->language->get('sb_address_flat') . ' ' . $sbInfo['flat'] : '';
+
+                            $sbData['address'] = [
+                                'name' => $this->language->get('sb_address'),
+                                'value' => $sbAddress
+                            ];
+                        }
+
+                        if (isset($sbInfo['comment'])) {
+                            $sbData['comment'] = [
+                                'name' => $this->language->get('sb_comment'),
+                                'value' => $sbInfo['comment']
+                            ];
+                        }
+                    }
+
+                    $sbError = '';
+                    if (empty($sbData)) $sbError = $this->language->get('sb_error');
+
+                    $sbResult = [];
+                    $sbResult['title'] = $sbTitle;
+                    $sbResult['data'] = $sbData;
+                    $sbResult['error'] = $sbError;
+
+                    $data['salesbeat'] = $sbResult;
+                    $data['link_sb_change_delivery'] = $this->url->link('sale/sb_order/changeDelivery', 'token=' . $this->session->data['token'] . '&order_id=' . $order_id, true);
+                    $data['entry_change'] = $this->language->get('entry_change');
+                }
+            }
+            ]]>
+            </add>
+        </operation>
+    </file>
+    
+    <!-- Выводим на странице информации о заказе-->
+    <file path="admin/view/template/sale/order_info.tpl">
+        <operation>
+            <search index="1"><![CDATA[<table class="table table-bordered">]]></search>
+            <add position="before"><![CDATA[
+            <?php if(!empty($salesbeat)): ?>
+              <table class="table table-bordered" data-salesbeat>
+                <thead>
+                <tr>
+                  <td class="text-left" colspan="2"><?= $salesbeat['title']; ?> [ <a href="<?= $link_sb_change_delivery; ?>"><?= $entry_change; ?></a> ]</td>
+                </tr>
+                </thead>
+                <tbody>
+                  <?php
+                  if (empty($salesbeat['error'])):
+                    foreach($salesbeat['data'] as $field):
+                      if (!empty($field['value'])):
+                        ?>
+                          <tr>
+                            <td style="width: 20%" class="text-left"><?= $field['name']; ?></td>
+                            <td style="width: 80%" class="text-left"><?= $field['value']; ?></td>
+                          </tr>
+                          <?php
+                        endif;
+                      endforeach;
+                    else:
+                      ?>
+                      <tr>
+                        <td class="text-left"><?= $salesbeat['error'] ?></td>
+                      </tr>
+                    <?php endif; ?>
+                </tbody>
+              </table>
+            <?php endif; ?>
+            ]]>
+            </add>
+        </operation>
+    </file>
+
+    <!-- Выводим на странице печати счета и списка доставки -->
+    <file path="admin/view/template/sale/{order_invoice,order_shipping}.tpl">
+        <operation>
+            <search index="2"><![CDATA[<table class="table table-bordered">]]></search>
+            <add position="before"><![CDATA[
+            <?php if(!empty($salesbeat)): ?>
+              <table class="table table-bordered" data-salesbeat>
+                <thead>
+                <tr>
+                  <td class="text-left" colspan="2"><?= $salesbeat['title']; ?></td>
+                </tr>
+                </thead>
+                <tbody>
+                  <?php
+                  if (empty($salesbeat['error'])):
+                    foreach($salesbeat['data'] as $field):
+                      if (!empty($field['value'])):
+                        ?>
+                          <tr>
+                            <td style="width: 20%" class="text-left"><?= $field['name']; ?></td>
+                            <td style="width: 80%" class="text-left"><?= $field['value']; ?></td>
+                          </tr>
+                          <?php
+                        endif;
+                      endforeach;
+                    else:
+                      ?>
+                      <tr>
+                        <td class="text-left"><?= $salesbeat['error'] ?></td>
+                      </tr>
+                    <?php endif; ?>
+                </tbody>
+              </table>
+            <?php endif; ?>
+            ]]>
+            </add>
+        </operation>
+    </file>
+</modification>
